@@ -205,6 +205,76 @@ for i, finding in enumerate(state.verified_findings):
                 except Exception:
                     st.caption("Chart unavailable")
 
+# ─── Ask your data ────────────────────────────────────────────
+
+st.divider()
+st.subheader("Ask your data")
+st.caption(
+    "Type a question in plain English. The engine parses it, runs a real statistical test, "
+    "and returns a **proven** answer — not a guess."
+)
+
+# Example questions based on detected column types
+example_qs = []
+if state.profile.numeric_cols and state.profile.categorical_cols:
+    example_qs.append(
+        f"Does {state.profile.numeric_cols[0]} differ by {state.profile.categorical_cols[0]}?"
+    )
+if len(state.profile.numeric_cols) >= 2:
+    example_qs.append(
+        f"Is there a correlation between {state.profile.numeric_cols[0]} and {state.profile.numeric_cols[1]}?"
+    )
+if state.profile.numeric_cols:
+    example_qs.append(f"Are there anomalies in {state.profile.numeric_cols[0]}?")
+
+if example_qs:
+    st.caption("Examples for this dataset: " + " · ".join(f'*"{q}"*' for q in example_qs[:2]))
+
+question = st.text_input(
+    "Your question",
+    placeholder="e.g. Does customer age affect churn?",
+    label_visibility="collapsed",
+)
+
+if question:
+    if st.button("Get verified answer", type="primary"):
+        with st.spinner("Parsing question → running stat test → verifying…"):
+            from app.pipeline.query import answer_question
+            result = answer_question(question, df, state.profile)
+        st.session_state[f"query_{question}"] = result
+
+    cached = st.session_state.get(f"query_{question}")
+    if cached:
+        result = cached
+        if "error" in result:
+            st.error(f"Could not answer: {result['error']}")
+        else:
+            verified = result["verified"]
+            if verified:
+                st.success(f"**Verified:** {result['answer']}")
+            else:
+                st.warning(f"**Not significant:** {result['answer']}")
+
+            qc1, qc2 = st.columns([2, 3])
+            with qc1:
+                badge = "✓ Statistically significant" if verified else "✗ Below significance threshold"
+                st.markdown(f"**{badge}**")
+                st.markdown(
+                    f"**Test:** `{result['test_name']}`  \n"
+                    f"**Effect ({result['effect_size_label']}):** `{result['effect_size']:.4f}`  \n"
+                    f"**p-value:** `{result['p_value']:.4e}`  \n"
+                    f"**n:** `{result['n']:,}`"
+                )
+                with st.expander("Detailed stats"):
+                    st.json(result["summary_numbers"])
+            with qc2:
+                if result.get("chart_json"):
+                    try:
+                        fig = go.Figure(json.loads(result["chart_json"]))
+                        st.plotly_chart(fig, use_container_width=True, key="query_chart")
+                    except Exception:
+                        pass
+
 # ─── Download report ──────────────────────────────────────────
 
 st.divider()
