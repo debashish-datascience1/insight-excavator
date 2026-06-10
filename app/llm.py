@@ -95,8 +95,10 @@ def _write_cache(key: str, result: dict) -> None:
     (Path(config.LLM_CACHE_DIR) / f"{key}.json").write_text(json.dumps(result))
 
 
-def call_llm(system_prompt: str, user_prompt: str) -> dict:
-    """Call the configured LLM with JSON output. Caches responses to disk."""
+def call_llm(system_prompt: str, user_prompt: str, max_retries: int = 3) -> dict:
+    """Call the configured LLM with JSON output. Retries on rate limits. Caches to disk."""
+    import time
+
     key = _cache_key(system_prompt, user_prompt)
     cached = _read_cache(key)
     if cached is not None:
@@ -123,7 +125,23 @@ def call_llm(system_prompt: str, user_prompt: str) -> dict:
     else:
         kwargs["messages"][0]["content"] += "\n\nIMPORTANT: Your entire response must be valid JSON only."
 
-    response = client.chat.completions.create(**kwargs)
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(**kwargs)
+            break
+        except Exception as exc:
+            last_exc = exc
+            err = str(exc).lower()
+            # Rate limit → exponential backoff; anything else → raise immediately
+            if "rate" in err or "429" in err or "too many" in err:
+                wait = 2 ** attempt          # 1s, 2s, 4s
+                time.sleep(wait)
+                continue
+            raise
+    else:
+        raise last_exc
+
     content = response.choices[0].message.content.strip()
 
     # Strip markdown code fences if the model added them
