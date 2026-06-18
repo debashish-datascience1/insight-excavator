@@ -12,6 +12,17 @@ SAMPLE_VALUES_N = 5
 CATEGORICAL_MAX_UNIQUE = 50
 CATEGORICAL_MAX_UNIQUE_RATIO = 0.2
 
+# Rows above this threshold get sampled before LLM stages (stat tests still run on full data)
+LLM_ROW_LIMIT = 50_000
+LLM_SAMPLE_SEED = 42
+
+
+def maybe_sample_for_llm(df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+    """Return (sample_df, was_sampled). Stat tests use the full df; only LLM prompts use the sample."""
+    if len(df) > LLM_ROW_LIMIT:
+        return df.sample(LLM_ROW_LIMIT, random_state=LLM_SAMPLE_SEED), True
+    return df, False
+
 
 def _infer_kind(col: pd.Series) -> str:
     if pd.api.types.is_datetime64_any_dtype(col):

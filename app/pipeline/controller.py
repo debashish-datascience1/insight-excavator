@@ -8,7 +8,7 @@ import time
 import uuid
 import pandas as pd
 from app.models import RunState
-from app.pipeline.ingest import run_ingest, profile_dataframe
+from app.pipeline.ingest import run_ingest, profile_dataframe, maybe_sample_for_llm
 from app.pipeline.clean import run_clean
 from app.pipeline.hypothesize import run_hypothesize
 from app.pipeline.verify import run_verify
@@ -37,10 +37,16 @@ def run_pipeline(
 
         # Stage 2 — Clean (LLM proposes → deterministic executor)
         _progress("Cleaning data…", 15)
+        # For LLM stages, sample large datasets to keep prompts fast and within token limits.
+        # Stat tests (verify) always run on the full dataframe for accuracy.
+        llm_df, was_sampled = maybe_sample_for_llm(df)
+        if was_sampled:
+            state.data_sample_json = llm_df.head(20).to_json(orient="records", date_format="iso")
         state, df = run_clean(state, df)
 
         # Re-profile after cleaning so hypotheses see the clean schema
         state.profile = profile_dataframe(df)
+        llm_df, _ = maybe_sample_for_llm(df)
 
         # Rounds of hypothesis generation + statistical verification
         for round_num in range(1, cfg.VERIFY_LOOP_ROUNDS + 1):
@@ -48,9 +54,11 @@ def run_pipeline(
 
             _progress(f"Generating hypotheses (round {round_num})…", base_pct)
             prior = state.verified_findings if round_num > 1 else None
-            state = run_hypothesize(state, df, round_number=round_num, prior_findings=prior)
+            # Hypothesize uses the (possibly sampled) llm_df for prompt context only
+            state = run_hypothesize(state, llm_df, round_number=round_num, prior_findings=prior)
 
             _progress(f"Verifying hypotheses (round {round_num})…", base_pct + 10)
+            # Verify always uses the full df for statistical accuracy
             state = run_verify(state, df)
             state = run_gate(state)
 
